@@ -16,7 +16,11 @@ from dash import Dash, dcc, html, Input, Output
 import plotly.express as px
 import os
 
-# Load dataset
+# ==============================
+# LOAD DATASETS
+# ==============================
+
+# Main reports dataset
 df = pd.read_csv("sema_uko_clean.csv")
 df.rename(columns={'lat': 'latitude', 'lng': 'longitude'}, inplace=True)
 df = df.dropna(subset=["latitude", "longitude"])
@@ -28,19 +32,31 @@ df['date'] = pd.date_range(end=pd.Timestamp.today(), periods=len(df))
 if 'day_of_week' not in df.columns:
     df['day_of_week'] = df['date'].dt.day_name()
 
-# Initialize app
+# Load AI-generated hotspots dataset
+try:
+    hotspots = pd.read_csv("sema_uko_hotspots.csv")
+except FileNotFoundError:
+    hotspots = pd.DataFrame(columns=["latitude", "longitude", "dominant_incident", "num_reports"])
+
+# ==============================
+# DASH APP INITIALIZATION
+# ==============================
 app = Dash(__name__)
 
-# Layout
+# ==============================
+# APP LAYOUT
+# ==============================
 app.layout = html.Div([
+    # Title and description
     html.Div([
         html.H1("SemaUko Crime Reporting Dashboard",
                 style={'textAlign': 'center', 'color': '#003366', 'marginBottom': '5px'}),
-        html.P("Explore crime reports by location, date range, and incident type.",
+        html.P("Explore crime reports by location, incident type, and AI-detected hotspots.",
                style={'textAlign': 'center', 'fontSize': '16px', 'color': '#555'})
     ], style={'padding': '20px', 'backgroundColor': '#f8f9fa', 'borderRadius': '10px',
               'marginBottom': '10px'}),
 
+    # Dropdown filter
     html.Div([
         html.Label("Select Day of the Week:",
                    style={'fontWeight': 'bold', 'marginRight': '10px'}),
@@ -49,42 +65,38 @@ app.layout = html.Div([
             options=[{"label": day, "value": day} for day in df["day_of_week"].unique()],
             value=df["day_of_week"].unique()[0],
             clearable=False,
-            style={'width': '40%', 'display': 'inline-block', 'marginRight': '20px'}
+            style={'width': '50%'}
         ),
-
-        html.Label("Select Date Range:",
-                   style={'fontWeight': 'bold', 'marginRight': '10px'}),
-        dcc.DatePickerRange(
-            id="date-range",
-            start_date=df['date'].min(),
-            end_date=df['date'].max(),
-            display_format='YYYY-MM-DD'
-        )
     ], style={'textAlign': 'center', 'padding': '15px'}),
 
+    # Report map
     html.Div([
         dcc.Graph(id="map")
     ], style={'padding': '0 20px'}),
 
+    # Bar chart
     html.Div([
         dcc.Graph(id="bar-chart")
+    ], style={'padding': '0 20px 30px 20px'}),
+
+    # Hotspot map
+    html.Div([
+        dcc.Graph(id="hotspot-map")
     ], style={'padding': '0 20px 30px 20px'})
 ])
 
-# Callback
+# ==============================
+# CALLBACKS
+# ==============================
+
+# Reports map and bar chart
 @app.callback(
     [Output("map", "figure"),
      Output("bar-chart", "figure")],
-    [Input("day-dropdown", "value"),
-     Input("date-range", "start_date"),
-     Input("date-range", "end_date")]
+    [Input("day-dropdown", "value")]
 )
-def update_dashboard(selected_day, start_date, end_date):
-    filtered_df = df[
-        (df["day_of_week"] == selected_day) &
-        (df["date"] >= pd.to_datetime(start_date)) &
-        (df["date"] <= pd.to_datetime(end_date))
-    ]
+def update_dashboard(selected_day):
+    filtered_df = df[df["day_of_week"] == selected_day]
 
     # Map
     map_fig = px.scatter_mapbox(
@@ -92,7 +104,7 @@ def update_dashboard(selected_day, start_date, end_date):
         lat="latitude",
         lon="longitude",
         hover_name="incidentType",
-        hover_data={"description": True, "hour": True, "date": True},
+        hover_data={"description": True, "hour": True},
         color="incidentType",
         zoom=11,
         height=500
@@ -110,7 +122,7 @@ def update_dashboard(selected_day, start_date, end_date):
         x="incidentType",
         y="count",
         color="incidentType",
-        title=f"Incident Breakdown ({start_date} to {end_date})"
+        title=f"Incident Breakdown for {selected_day}"
     )
     bar_fig.update_layout(
         xaxis_title="Incident Type",
@@ -123,6 +135,44 @@ def update_dashboard(selected_day, start_date, end_date):
     return map_fig, bar_fig
 
 
+# Hotspot map
+@app.callback(
+    Output("hotspot-map", "figure"),
+    Input("map", "id")
+)
+def update_hotspots(_):
+    if hotspots.empty:
+        fig = px.scatter_mapbox(lat=[], lon=[], zoom=11, height=500)
+        fig.update_layout(
+            mapbox_style="open-street-map",
+            title="No Hotspot Data Found",
+            title_x=0.5
+        )
+        return fig
+
+    fig = px.scatter_mapbox(
+        hotspots,
+        lat="latitude",
+        lon="longitude",
+        size="num_reports",
+        color="dominant_incident",
+        hover_name="dominant_incident",
+        hover_data={"num_reports": True},
+        zoom=11,
+        height=500
+    )
+    fig.update_layout(
+        mapbox_style="open-street-map",
+        title="Detected Crime Hotspots (AI-Generated)",
+        title_x=0.5,
+        margin={"r": 0, "t": 30, "l": 0, "b": 0}
+    )
+    return fig
+
+
+# ==============================
+# RUN APP
+# ==============================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
     app.run(host="0.0.0.0", port=port, debug=False)
